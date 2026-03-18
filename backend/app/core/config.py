@@ -41,15 +41,10 @@ class Settings(BaseSettings):
     mongodb_max_pool_size: int = Field(default=100, env="MONGODB_MAX_POOL_SIZE")
     mongodb_min_pool_size: int = Field(default=10, env="MONGODB_MIN_POOL_SIZE")
     
-    # Vector Database - ChromaDB
-    chroma_host: str = Field(default="localhost", env="CHROMA_HOST")
-    chroma_port: int = Field(default=8001, env="CHROMA_PORT")
-    chroma_collection_name: str = Field(default="device_manuals", env="CHROMA_COLLECTION_NAME")
-    
-    # Vector Database - Pinecone
-    pinecone_api_key: Optional[str] = Field(default=None, env="PINECONE_API_KEY")
-    pinecone_environment: Optional[str] = Field(default=None, env="PINECONE_ENVIRONMENT")
-    pinecone_index_name: Optional[str] = Field(default=None, env="PINECONE_INDEX_NAME")
+    # Vector Database - Qdrant Cloud
+    qdrant_url: str = Field(default="", env="QDRANT_URL")
+    qdrant_api_key: str = Field(default="", env="QDRANT_API_KEY")
+    qdrant_collection_name: str = Field(default="device_manuals", env="QDRANT_COLLECTION_NAME")
     
     # LLM Configuration
     llm_provider: str = Field(default="openai", env="LLM_PROVIDER")
