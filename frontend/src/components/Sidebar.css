@@ -56,38 +56,27 @@
     }
 }
 
-/* ── Toggle tab — always visible on the right edge (desktop only) ── */
-.sidebar-tab-toggle {
+/* ── Toggle button ── */
+.sidebar-toggle-btn {
     display: none;
-    position: absolute;
-    top: 18px;
-    right: -25px;
-    /* fully outside sidebar + extra gap */
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: var(--dark-surface-light);
-    border: 1px solid var(--dark-border);
+    background: transparent;
+    border: none;
     color: var(--dark-text-secondary);
     cursor: pointer;
     align-items: center;
     justify-content: center;
-    z-index: 60;
-    transition: background var(--transition-fast), color var(--transition-fast),
-        transform var(--transition-fast), box-shadow var(--transition-fast);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
 }
 
-.sidebar-tab-toggle:hover {
-    background: var(--primary-500);
-    color: white;
-    border-color: var(--primary-600);
-    transform: scale(1.15);
-    box-shadow: 0 4px 14px rgba(14, 165, 233, 0.45);
+.sidebar-toggle-btn:hover {
+    background: var(--dark-surface-light);
+    color: var(--dark-text);
 }
 
 @media (min-width: 1024px) {
-    .sidebar-tab-toggle {
+    .sidebar-toggle-btn {
         display: flex;
     }
 }
@@ -100,6 +89,12 @@
     padding: 14px 12px;
     border-bottom: 1px solid var(--dark-border);
     min-height: 56px;
+}
+
+.sidebar-header.collapsed-header {
+    flex-direction: column;
+    padding: 12px 0;
+    gap: 16px;
 }
 
 /* Expanded: full new-chat button */

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { MessageSquare, Plus, PanelLeft } from 'lucide-react';
 import { chatAPI } from '../services/api';
 import './Sidebar.css';
 
@@ -40,28 +40,27 @@ const Sidebar = ({ currentConversationId, onSelectConversation, onNewChat, isOpe
 
             <div className={`sidebar ${isOpen ? 'open' : ''} ${isCollapsed ? 'collapsed' : ''} glass-effect`}>
 
-                {/* ── Collapse toggle tab (desktop only) ── */}
-                <button
-                    className="sidebar-tab-toggle"
-                    onClick={() => setIsCollapsed(c => !c)}
-                    title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                >
-                    {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                </button>
-
                 {/* ── Header ── */}
-                <div className="sidebar-header">
+                <div className={`sidebar-header ${isCollapsed ? 'collapsed-header' : ''}`}>
                     {isCollapsed ? (
-                        /* Collapsed: only the new-chat icon, centred */
-                        <button className="new-chat-icon-btn" onClick={onNewChat} title="New Chat">
-                            <Plus size={20} />
-                        </button>
+                        /* Collapsed: toggle button, then new chat */
+                        <>
+                            <button className="new-chat-icon-btn" onClick={onNewChat} title="New Chat">
+                                <Plus size={20} />
+                            </button>
+                            <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(c => !c)} title="Expand sidebar">
+                                <PanelLeft size={20} />
+                            </button>
+                        </>
                     ) : (
-                        /* Expanded: full new-chat button + mobile close */
+                        /* Expanded: full new-chat button + toggle */
                         <>
                             <button className="new-chat-button" onClick={onNewChat}>
                                 <Plus size={18} />
                                 <span>New Chat</span>
+                            </button>
+                            <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(c => !c)} title="Collapse sidebar">
+                                <PanelLeft size={20} />
                             </button>
                         </>
                     )}
