@@ -6,6 +6,7 @@ Backed by Qdrant Cloud vector store.
 from typing import List, Dict, Any, Optional
 import logging
 import asyncio
+import time
 from functools import partial
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -15,6 +16,8 @@ from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 
+import uuid
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -23,6 +26,7 @@ from qdrant_client.models import (
     FieldCondition,
     MatchValue,
     PayloadSchemaType,
+    PointStruct,
 )
 
 from app.core.config import settings
@@ -73,10 +77,13 @@ class RAGService:
             )
 
             # Qdrant Cloud client
+            # timeout=120: the default (~5s) was too short — the upsert HTTP
+            # request was being killed before Qdrant could respond.
             logger.info(f"Connecting to Qdrant Cloud: {settings.qdrant_url}")
             self.qdrant_client = QdrantClient(
                 url=settings.qdrant_url,
                 api_key=settings.qdrant_api_key,
+                timeout=120,
             )
 
             # Ensure collection exists
@@ -133,14 +140,21 @@ class RAGService:
             )
 
         # Ensure keyword indexes exist for all filterable metadata fields.
-        # LangChain QdrantVectorStore stores metadata at the TOP LEVEL of the
-        # Qdrant payload (not nested under a 'metadata' key).
+        # Two schemas coexist in the collection:
+        #   Schema A (PDF uploads)   : flat top-level keys  e.g.  device_type
+        #   Schema B (ChromaDB mig.) : nested under metadata e.g.  metadata.device_type
+        # We index BOTH paths so Qdrant can filter efficiently on either.
         # create_payload_index is idempotent — safe to call every startup.
         _filter_fields = [
             "device_type",
             "brand",
             "model",
             "document_id",
+            # nested paths for ChromaDB-migrated points
+            "metadata.device_type",
+            "metadata.brand",
+            "metadata.model",
+            "metadata.document_id",
         ]
         for field in _filter_fields:
             try:
@@ -220,6 +234,10 @@ Your response:"""
             )
 
             # Format results
+            # NOTE: Two payload schemas coexist:
+            #   Schema A (PDF uploads)   – flat top-level keys
+            #   Schema B (ChromaDB mig.) – fields nested under a 'metadata' dict
+            # _get_meta() resolves a field from either location transparently.
             chunks = []
             for doc, score in results:
                 # Qdrant cosine similarity score is already in [0,1] (higher = more similar)
@@ -229,13 +247,13 @@ Your response:"""
                     chunks.append(
                         {
                             "content": doc.page_content,
-                            "source_file": doc.metadata.get("source_file", "Unknown"),
-                            "page_number": doc.metadata.get("page_number"),
-                            "section_name": doc.metadata.get("section_name"),
+                            "source_file": self._get_meta(doc.metadata, "source_file", "Unknown"),
+                            "page_number": self._get_meta(doc.metadata, "page_number"),
+                            "section_name": self._get_meta(doc.metadata, "section_name"),
                             "relevance_score": round(relevance_score, 3),
-                            "device_type": doc.metadata.get("device_type"),
-                            "brand": doc.metadata.get("brand"),
-                            "model": doc.metadata.get("model"),
+                            "device_type": self._get_meta(doc.metadata, "device_type"),
+                            "brand": self._get_meta(doc.metadata, "brand"),
+                            "model": self._get_meta(doc.metadata, "model"),
                         }
                     )
 
@@ -315,40 +333,115 @@ Your response:"""
         self,
         texts: List[str],
         metadatas: List[Dict[str, Any]],
+        batch_size: int = 25,
+        max_retries: int = 3,
+        retry_delay: float = 5.0,
     ) -> int:
-        """Add documents to the Qdrant vector store."""
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                partial(
-                    self.vector_store.add_texts,
-                    texts=texts,
-                    metadatas=metadatas,
-                ),
-            )
-            logger.info(f"Added {len(texts)} chunks to Qdrant")
-            return len(texts)
+        """Add documents to the Qdrant vector store in small batches with retries.
 
-        except Exception as e:
-            logger.error(f"Error adding documents: {e}")
-            raise
+        Two-phase upload per batch:
+          1. Embed texts on CPU  (no Qdrant connection held open – no timeout risk)
+          2. Upsert pre-computed vectors to Qdrant  (fast network call)
+
+        If the upsert step times out, it is retried up to `max_retries` times
+        with a `retry_delay`-second pause.  Embeddings are cached so we never
+        recompute them on a retry.
+        """
+        total = len(texts)
+        added = 0
+        loop = asyncio.get_running_loop()
+
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            batch_texts = texts[start:end]
+            batch_metas = metadatas[start:end]
+            batch_num = start // batch_size + 1
+
+            # ── Step 1: Embed texts (CPU-bound; runs once per batch) ───────
+            logger.info(f"Embedding batch {batch_num} ({start}-{end-1} of {total})…")
+            embeddings_list: List[List[float]] = await loop.run_in_executor(
+                None,
+                partial(self.embeddings.embed_documents, batch_texts),
+            )
+
+            # ── Step 2: Build PointStructs ─────────────────────────────
+            points = [
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "page_content": text,
+                        "metadata": meta,
+                    },
+                )
+                for text, meta, embedding in zip(
+                    batch_texts, batch_metas, embeddings_list
+                )
+            ]
+
+            # ── Step 3: Upload to Qdrant (with retry on timeout) ─────────
+            last_error = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        partial(
+                            self.qdrant_client.upsert,
+                            collection_name=settings.qdrant_collection_name,
+                            points=points,
+                        ),
+                    )
+                    added += len(batch_texts)
+                    logger.info(
+                        f"Batch {batch_num} uploaded ✓  "
+                        f"({added}/{total} chunks done)"
+                        + (f"  [attempt {attempt}]" if attempt > 1 else "")
+                    )
+                    last_error = None
+                    break  # success — move to next batch
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Batch {batch_num} attempt {attempt} failed: {e}. "
+                            f"Retrying in {retry_delay}s…"
+                        )
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(
+                            f"Batch {batch_num} failed after {max_retries} attempts: {e}"
+                        )
+
+            if last_error is not None:
+                raise last_error  # propagate only after all retries exhausted
+
+        logger.info(f"Successfully stored all {added} chunks in Qdrant")
+        return added
 
     # ------------------------------------------------------------------
     # Deletion
     # ------------------------------------------------------------------
 
     def delete_document(self, document_id: str) -> bool:
-        """Delete all vectors belonging to a document from Qdrant."""
+        """Delete all vectors belonging to a document from Qdrant.
+
+        Handles both payload schemas:
+          Schema A (PDF uploads)   – document_id at top level
+          Schema B (ChromaDB mig.) – document_id nested under metadata
+        """
         try:
             self.qdrant_client.delete(
                 collection_name=settings.qdrant_collection_name,
                 points_selector=Filter(
-                    must=[
+                    should=[
                         FieldCondition(
                             key="document_id",
                             match=MatchValue(value=document_id),
-                        )
+                        ),
+                        FieldCondition(
+                            key="metadata.document_id",
+                            match=MatchValue(value=document_id),
+                        ),
                     ]
                 ),
             )
@@ -363,6 +456,20 @@ Your response:"""
     # Helpers
     # ------------------------------------------------------------------
 
+    def _get_meta(self, metadata: Dict[str, Any], key: str, default: Any = None) -> Any:
+        """Read a metadata field from either the flat schema (PDF uploads) or the
+        nested schema (ChromaDB-migrated points where fields live under 'metadata').
+        Flat schema takes priority if both are present.
+        """
+        # Flat schema (Schema A – PDF uploads)
+        if key in metadata and metadata[key] is not None:
+            return metadata[key]
+        # Nested schema (Schema B – ChromaDB migration)
+        nested = metadata.get("metadata") or {}
+        if isinstance(nested, dict) and key in nested and nested[key] is not None:
+            return nested[key]
+        return default
+
     def _build_filter(
         self,
         device_type: Optional[str],
@@ -371,26 +478,39 @@ Your response:"""
     ) -> Optional[Filter]:
         """Build a Qdrant Filter from optional metadata fields.
 
-        LangChain's QdrantVectorStore stores metadata at the TOP LEVEL of the
-        Qdrant payload, so the field keys are plain names (e.g. 'device_type'),
-        NOT nested paths like 'metadata.device_type'.
+        Two payload schemas coexist in the collection:
+          Schema A (PDF uploads)   – flat keys:            device_type, brand, model
+          Schema B (ChromaDB mig.) – nested under metadata: metadata.device_type, …
+
+        For each provided filter value we create a 'should' (OR) sub-filter that
+        matches either schema, then wrap all sub-filters in a 'must' (AND) block
+        so that multiple filters are applied together.
         """
-        conditions = []
+        must_conditions = []
 
         if device_type:
-            conditions.append(
-                FieldCondition(key="device_type", match=MatchValue(value=device_type))
+            must_conditions.append(
+                Filter(should=[
+                    FieldCondition(key="device_type",          match=MatchValue(value=device_type)),
+                    FieldCondition(key="metadata.device_type", match=MatchValue(value=device_type)),
+                ])
             )
         if brand:
-            conditions.append(
-                FieldCondition(key="brand", match=MatchValue(value=brand))
+            must_conditions.append(
+                Filter(should=[
+                    FieldCondition(key="brand",          match=MatchValue(value=brand)),
+                    FieldCondition(key="metadata.brand", match=MatchValue(value=brand)),
+                ])
             )
         if model:
-            conditions.append(
-                FieldCondition(key="model", match=MatchValue(value=model))
+            must_conditions.append(
+                Filter(should=[
+                    FieldCondition(key="model",          match=MatchValue(value=model)),
+                    FieldCondition(key="metadata.model", match=MatchValue(value=model)),
+                ])
             )
 
-        return Filter(must=conditions) if conditions else None
+        return Filter(must=must_conditions) if must_conditions else None
 
 
 # Global RAG service instance

@@ -352,3 +352,73 @@ async def delete_document(
     logger.info(f"Document deleted: {document_id}")
     
     return {"message": "Document deleted successfully"}
+
+
+@router.post("/documents/{document_id}/reindex")
+async def reindex_document(
+    document_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Re-process a FAILED document without re-uploading the file.
+
+    Useful when a document partially uploaded (e.g. last batch timed out).
+    Resets the status to PENDING and re-runs the full embedding + indexing
+    pipeline from the already-saved PDF on disk.
+    """
+    document = await ManualDocument.find_one(
+        ManualDocument.document_id == document_id
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    # Verify ownership
+    await document.fetch_link(ManualDocument.uploaded_by)
+    if document.uploaded_by.id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to reindex this document",
+        )
+
+    if not document.file_path or not os.path.exists(document.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Original file not found on disk. Please re-upload the document.",
+        )
+
+    # Reset status so the processor will run again
+    document.status = DocumentStatus.PENDING
+    document.error_message = None
+    document.chunks_count = 0
+    await document.save()
+
+    # Re-process (same pipeline as upload)
+    try:
+        from app.services.document_processor import DocumentProcessor
+        processor = DocumentProcessor()
+        success = await processor.process_document(document.id)
+
+        if success:
+            return {
+                "message": "Document re-indexed successfully",
+                "document_id": document_id,
+                "status": "indexed",
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Re-indexing failed. Check server logs for details.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error re-indexing document {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Re-indexing error: {str(e)}",
+        )
+
