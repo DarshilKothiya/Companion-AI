@@ -5,7 +5,8 @@
 - **Python 3.10+**
 - **Node.js 18+**
 - **MongoDB 7.0+** — [Download](https://www.mongodb.com/try/download/community)
-- **OpenAI API Key**
+- **Google Gemini or Groq API Key**
+- **Qdrant Cloud Account** (Free tier works)
 
 ---
 
@@ -45,19 +46,13 @@ copy .env.example .env
 Minimum required settings:
 
 ```env
-OPENAI_API_KEY=your-openai-api-key-here
+GOOGLE_API_KEY=your-google-api-key-here
+GROQ_API_KEY=your-groq-api-key-here
 SECRET_KEY=any-random-string-at-least-32-chars
 MONGODB_URL=mongodb://localhost:27017
-CHROMA_HOST=localhost
-CHROMA_PORT=8001
-```
-
-### Start ChromaDB
-
-ChromaDB is installed via pip as part of `requirements.txt`. Run it as a local server:
-
-```powershell
-chroma run --path ./chroma_data --port 8001
+QDRANT_URL=https://<your-cluster>.qdrant.io
+QDRANT_API_KEY=your-qdrant-api-key
+QDRANT_COLLECTION_NAME=device_manuals
 ```
 
 ### Start the Backend API
@@ -112,14 +107,28 @@ db.device_categories.insertMany([
 
 ### Backend won't start
 - Verify MongoDB is running: `mongosh --eval "db.stats()"`
-- Check ChromaDB is running on port 8001
-- Double-check `.env` values (especially `OPENAI_API_KEY`)
+- Double-check `.env` values (especially `GOOGLE_API_KEY` or `GROQ_API_KEY` and Qdrant credentials)
 
 ### Frontend can't connect
 - Confirm backend is on port 8000
 - Check `REACT_APP_API_URL` in `frontend/.env` (if set)
 
 ### Document processing fails
-- Ensure ChromaDB server is running
-- Verify your OpenAI API key has sufficient credits
+- Ensure Qdrant Cloud credentials are correct and collection exists
+- Verify your API keys (Gemini/Groq) are active and have sufficient quotas
 - Check backend logs for specific errors
+
+---
+
+## Deployment
+
+### Backend (Hugging Face Spaces)
+1. Create a new Docker Space on Hugging Face.
+2. Upload the `backend/` directory contents (including the `Dockerfile`).
+3. Set all `.env` variables as Space Secrets (e.g., `MONGODB_URL`, `QDRANT_URL`, `QDRANT_API_KEY`, `GOOGLE_API_KEY`).
+4. The space will build and run the FastAPI server automatically.
+
+### Frontend (Vercel)
+1. Import the `frontend/` directory into Vercel.
+2. Set the `REACT_APP_API_URL` environment variable to your Hugging Face Space URL.
+3. Deploy! Vercel handles the React build process automatically.

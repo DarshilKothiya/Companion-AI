@@ -13,7 +13,7 @@ An AI-powered chatbot that helps users troubleshoot device problems using RAG (R
 | Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`, 384-dim) |
 | AI / LLM | LangChain + **Google Gemini / Groq** (switchable) |
 | Auth | JWT (`python-jose`) + bcrypt |
-| Document Parsing | pdfplumber, PyPDF2 |
+| Document Parsing | pdfplumber, PyPDF2, pymupdf, easyocr, pillow |
 
 ## Project Structure
 
@@ -147,7 +147,9 @@ npm start
 - **Multi-model LLM support** — switch between Google Gemini and Groq (Llama 3.3) per chat session from a dropdown in the UI
 - **RAG-based responses** with source citations pulled from uploaded device manuals
 - **PDF & TXT manual upload** with automatic Qdrant indexing and payload filtering
-- **Device / brand / model filtering** — dropdowns dynamically populated from MongoDB
+- **Advanced Document Processing** — includes complex multi-column table detection and OCR image extraction to prevent data loss
+- **Clean Chat UI** — Device/brand/model filtering configuration is integrated directly into the sidebar to keep the chat workspace uncluttered
+- **LLM-Generated Chat Titles** — automatically summarizes the first query to generate a descriptive title, persisted in MongoDB
 - **Collapsible sidebar** with full conversation history
 - **Typing indicator** — animated dots while the AI is generating a response
 - **User feedback** — thumbs up / down on every message
@@ -165,7 +167,7 @@ python evaluation/evaluate_rag.py
 
 - Reads ground-truth questions from `evaluation/eval_questions_real.json`
 - Queries the live RAG pipeline and scores responses
-- Writes detailed results to `evaluation/results/rag_eval_<timestamp>.json`
+- Generates comprehensive, aggregated performance reports to `evaluation/results/rag_eval_<timestamp>.json`
 - Metrics include: retrieval hit rate, answer relevance, latency
 
 ## Migration (ChromaDB → Qdrant)

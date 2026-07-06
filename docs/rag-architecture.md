@@ -54,12 +54,11 @@ This document describes the Retrieval Augmented Generation (RAG) system implemen
 
 **File:** `app/services/document_processor.py`
 
-Supports PDF and plain text files. For PDFs, two extractors are tried in order:
+Supports PDF and plain text files. For PDFs, an advanced extraction pipeline is used:
 
-| Extractor | When used |
-|---|---|
-| `pdfplumber` | First attempt — better for complex layouts and tables |
-| `PyPDF2` | Fallback if pdfplumber fails or returns empty text |
+- **Standard Text & Tables**: Uses `pdfplumber` first. It features complex multi-column table detection—if a lossy or complex layout is detected, it automatically falls back to raw page text to prevent data loss, while preserving markdown formatting for simple tables.
+- **Fallback**: Uses `PyPDF2` if `pdfplumber` fails or returns empty text.
+- **Image OCR**: Integrates `pymupdf` to extract images larger than 100x100 pixels. Uses `easyocr` (with models stored in `E:\easyocr_models`) to perform OCR. Extracted text > 20 characters is formatted as a distinct chunk with `"source": "image_ocr"` metadata.
 
 After extraction the text is cleaned: strips blank lines, collapses consecutive newlines.
 
@@ -94,6 +93,8 @@ Each chunk is stored with flat top-level payload fields:
     "document_id": "<uuid>",
     "chunk_index": 0,
     "total_chunks": 42,
+    "source":      "text",           # or "image_ocr" for extracted images
+    "page":        12,               # Page number of extraction
     # + auto-detected: section_type, detected_model
 }
 ```
@@ -251,7 +252,8 @@ python evaluation/evaluate_rag.py
 
 - Reads ground-truth Q&A pairs from `evaluation/eval_questions_real.json`
 - Calls `rag_service.generate_answer()` directly for each question
-- Scores responses and writes detailed results to `evaluation/results/rag_eval_<timestamp>.json`
+- Generates comprehensive, aggregated performance reports summarizing retrieval hit rates, answer relevance, and latency, rather than just granular, per-question logs.
+- Writes detailed results to `evaluation/results/rag_eval_<timestamp>.json`
 
 Use `evaluation/discover_indexed_data.py` to inspect what documents and device categories are currently indexed in Qdrant.
 
